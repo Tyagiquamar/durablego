@@ -1,0 +1,66 @@
+syntax = "proto3";
+
+package durablego.v1;
+
+option go_package = "github.com/tyagiquamar/durablego/proto/durablegov1";
+
+service WorkerService {
+  rpc RegisterWorker(RegisterWorkerRequest) returns (RegisterWorkerResponse);
+  rpc PollActivity(PollActivityRequest) returns (PollActivityResponse);
+  rpc HeartbeatActivity(HeartbeatActivityRequest) returns (HeartbeatActivityResponse);
+  rpc CompleteActivity(CompleteActivityRequest) returns (CompleteActivityResponse);
+  rpc FailActivity(FailActivityRequest) returns (FailActivityResponse);
+}
+
+message RegisterWorkerRequest {
+  string worker_id = 1;
+  repeated string task_queues = 2;
+  int32 concurrency = 3;
+}
+
+message RegisterWorkerResponse {
+  string status = 1;
+}
+
+message PollActivityRequest {
+  string worker_id = 1;
+  string task_queue = 2;
+}
+
+message PollActivityResponse {
+  string workflow_id = 1;
+  string activity_id = 2;
+  string activity_name = 3;
+  int32 attempt = 4;
+  int64 fencing_token = 5;
+  string lease_expires_at = 6;
+  string application_idempotency_key = 7;
+}
+
+message HeartbeatActivityRequest {
+  string worker_id = 1;
+  string activity_id = 2;
+  int64 fencing_token = 3;
+}
+
+message HeartbeatActivityResponse {}
+
+message CompleteActivityRequest {
+  string worker_id = 1;
+  string activity_id = 2;
+  int64 fencing_token = 3;
+  bytes output_json = 4;
+}
+
+message CompleteActivityResponse {}
+
+message FailActivityRequest {
+  string worker_id = 1;
+  string activity_id = 2;
+  int64 fencing_token = 3;
+  bool retryable = 4;
+  string message = 5;
+}
+
+message FailActivityResponse {}
+

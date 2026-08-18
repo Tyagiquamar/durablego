@@ -1,0 +1,22 @@
+{
+  "name": "durablego-dashboard",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "lint": "tsc --noEmit"
+  },
+  "dependencies": {
+    "next": "15.2.8",
+    "react": "^19",
+    "react-dom": "^19",
+    "lucide-react": "^0.454.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22",
+    "@types/react": "^19",
+    "@types/react-dom": "^19",
+    "typescript": "^5"
+  }
+}

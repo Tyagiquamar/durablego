@@ -1,0 +1,87 @@
+services:
+  postgres:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_USER: durablego
+      POSTGRES_PASSWORD: durablego
+      POSTGRES_DB: durablego
+    ports:
+      - "5432:5432"
+    volumes:
+      - durablego-postgres:/var/lib/postgresql/data
+      - ./migrations:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U durablego -d durablego"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  api:
+    image: golang:1.23
+    working_dir: /src
+    command: go run ./cmd/api
+    environment:
+      DURABLEGO_ADDR: :8080
+      DURABLEGO_DATABASE_URL: postgres://durablego:durablego@postgres:5432/durablego?sslmode=disable
+    volumes:
+      - .:/src
+      - dashboard-node-modules:/src/web/node_modules
+    ports:
+      - "8080:8080"
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  scheduler:
+    image: golang:1.23
+    working_dir: /src
+    command: go run ./cmd/scheduler
+    environment:
+      DURABLEGO_DATABASE_URL: postgres://durablego:durablego@postgres:5432/durablego?sslmode=disable
+    volumes:
+      - .:/src
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  worker-a:
+    image: golang:1.23
+    working_dir: /src
+    command: go run ./cmd/worker
+    environment:
+      DURABLEGO_DATABASE_URL: postgres://durablego:durablego@postgres:5432/durablego?sslmode=disable
+    volumes:
+      - .:/src
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  worker-b:
+    image: golang:1.23
+    working_dir: /src
+    command: go run ./cmd/worker
+    environment:
+      DURABLEGO_DATABASE_URL: postgres://durablego:durablego@postgres:5432/durablego?sslmode=disable
+    volumes:
+      - .:/src
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  dashboard:
+    image: node:24-alpine
+    working_dir: /src/web
+    command: sh -c "npm install --package-lock=false --no-audit --no-fund && npm run dev -- --hostname 0.0.0.0"
+    environment:
+      CI: "true"
+      NEXT_PUBLIC_DURABLEGO_API: http://localhost:8080
+    volumes:
+      - .:/src
+    ports:
+      - "3100:3000"
+    depends_on:
+      - api
+
+volumes:
+  durablego-postgres:
+  dashboard-node-modules:
