@@ -1,94 +1,15 @@
-import { Activity, Database, GitBranch, ShieldCheck } from "lucide-react"
-import { getWorkflows } from "../lib/api"
+import { EmptyState } from "../components/empty-state"
+import { DashboardUnavailable, PartialObservationNotice } from "../components/dashboard-state"
+import { MetricGrid } from "../components/metric-grid"
+import { ProofTimeline } from "../components/proof-timeline"
+import { WorkflowTable } from "../components/workflow-table"
+import { getDashboardData, resolveMode } from "../lib/api"
 
-const scenes = [
-  {
-    title: "Crash Recovery",
-    invariant: "Expired leases become claimable without losing event history.",
-    status: "Ready for scripted demo",
-  },
-  {
-    title: "Stale Fencing",
-    invariant: "Old fencing tokens cannot complete reclaimed activity attempts.",
-    status: "Covered by failure test",
-  },
-  {
-    title: "Duplicate Start",
-    invariant: "Namespace plus idempotency key maps repeated starts to one execution.",
-    status: "Covered by integration test",
-  },
-  {
-    title: "Retry Exhaustion",
-    invariant: "Bounded retries end in a visible terminal failure.",
-    status: "Covered by unit test",
-  },
-]
+type PageProps = { searchParams: Promise<{ mode?: string | string[] }> }
 
-export default async function Home() {
-  const workflows = await getWorkflows()
-  const stats = [
-    ["Running", String(workflows.filter((workflow) => workflow.Status === "running").length)],
-    ["Completed", String(workflows.filter((workflow) => workflow.Status === "completed").length)],
-    ["Failed", String(workflows.filter((workflow) => workflow.Status === "failed").length)],
-    ["Workers Online", "2"],
-  ]
-
-  return (
-    <main>
-      <header className="topbar">
-        <div>
-          <p className="eyebrow">Durable workflow lab</p>
-          <h1>DurableGo</h1>
-        </div>
-        <a href="http://localhost:8080/healthz">API Health</a>
-      </header>
-
-      <section className="summary">
-        <div>
-          <ShieldCheck aria-hidden />
-          <p>At-least-once activity execution with explicit negative guarantees for external side effects.</p>
-        </div>
-        <div>
-          <Database aria-hidden />
-          <p>PostgreSQL schema owns workflow state, activity leases, idempotency, and ordered history.</p>
-        </div>
-        <div>
-          <GitBranch aria-hidden />
-          <p>DAG-ready execution model unlocks downstream work only after dependencies complete.</p>
-        </div>
-        <div>
-          <Activity aria-hidden />
-          <p>Prometheus-style metrics and event timelines make failure proofs inspectable.</p>
-        </div>
-      </section>
-
-      <section className="metrics" aria-label="Fleet summary">
-        {stats.map(([label, value]) => (
-          <div key={label}>
-            <span>{label}</span>
-            <strong>{value}</strong>
-          </div>
-        ))}
-      </section>
-
-      <section className="scenes">
-        <div className="section-title">
-          <p className="eyebrow">Proof scenes</p>
-          <h2>What fails, what holds, where to look.</h2>
-        </div>
-        <div className="scene-list">
-          {scenes.map((scene, index) => (
-            <article key={scene.title}>
-              <span>{String(index + 1).padStart(2, "0")}</span>
-              <div>
-                <h3>{scene.title}</h3>
-                <p>{scene.invariant}</p>
-              </div>
-              <strong>{scene.status}</strong>
-            </article>
-          ))}
-        </div>
-      </section>
-    </main>
-  )
+export default async function Home({ searchParams }: PageProps) {
+  const mode = resolveMode((await searchParams).mode)
+  const data = await getDashboardData(mode)
+  if (data.state === "unavailable") return <DashboardUnavailable mode={mode} title="Workflow evidence cannot be loaded." message={data.message} path="/" />
+  return <><header className="page-heading"><div><p className="eyebrow">Durable workflow lab</p><h1>Execution proof, made inspectable.</h1></div><p>{mode === "demo" ? "A deterministic data set for reliability review." : `Observed ${data.workflows.length} recent workflows from the current API.`}</p></header>{data.state === "empty" ? <EmptyState title="No Live executions" detail="The DurableGo API responded successfully, but it has no workflow executions." /> : <>{data.state === "partial" ? <PartialObservationNotice failedReads={data.detailFailures} /> : null}<MetricGrid workflows={data.workflows} /><section className="content-section"><div className="section-heading"><div><p className="eyebrow">Recent executions</p><h2>Workflow ledger</h2></div><a href={`/workflows?mode=${mode}`}>All executions</a></div><WorkflowTable workflows={data.workflows} mode={mode} compact /></section><ProofTimeline mode={mode} workflows={data.workflows} /></>}</>
 }

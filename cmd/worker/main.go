@@ -21,7 +21,7 @@ func main() {
 	log.Println("durablego demo worker started")
 	runtime := worker.Runtime{
 		Backend:     store,
-		WorkerID:    "demo-worker",
+		WorkerID:    cfg.WorkerID,
 		Concurrency: 2,
 		Handlers: map[string]worker.Handler{
 			"validate": func(context.Context, execution.Claim) error { return nil },

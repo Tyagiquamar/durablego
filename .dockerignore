@@ -1,0 +1,6 @@
+.git
+.next
+web/.next
+web/node_modules
+web/.env*
+output

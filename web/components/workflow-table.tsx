@@ -1,0 +1,8 @@
+import { ArrowUpRight } from "lucide-react"
+import type { DashboardMode, WorkflowView } from "../lib/dashboard-types"
+import { formatDate } from "../lib/dashboard-types"
+import { StatusBadge } from "./status-badge"
+
+export function WorkflowTable({ workflows, mode, compact = false }: { workflows: WorkflowView[]; mode: DashboardMode; compact?: boolean }) {
+  return <section className="workflow-table" aria-label="Workflow executions"><div className="workflow-head"><span>Execution</span><span>Definition</span><span>Status</span><span>Idempotency</span><span>Updated</span></div><div className="workflow-rows">{workflows.slice(0, compact ? 5 : undefined).map((workflow) => <article className="workflow-row" key={workflow.id}><div data-label="Execution"><a className="execution-link" href={`/workflows/${encodeURIComponent(workflow.id)}?mode=${mode}`}>{workflow.id}<ArrowUpRight aria-hidden="true" /></a><small>{workflow.namespace}</small></div><div data-label="Definition"><strong>{workflow.definition}</strong><small>created {formatDate(workflow.createdAt)}</small></div><div data-label="Status"><StatusBadge status={workflow.status} /></div><div data-label="Idempotency"><span className={workflow.idempotencyKey ? "mono" : "muted"}>{workflow.idempotencyKey ?? "not supplied"}</span></div><time data-label="Updated" className="mono" dateTime={workflow.updatedAt ?? undefined}>{formatDate(workflow.updatedAt)}</time></article>)}</div></section>
+}

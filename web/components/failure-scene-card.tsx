@@ -1,0 +1,5 @@
+import type { DashboardMode, FailureScene } from "../lib/dashboard-types"
+
+export function FailureSceneCard({ scene, mode }: { scene: FailureScene; mode: DashboardMode }) {
+  return <article className="failure-scene-card"><header><span className="scene-index">{scene.id.replace("-", " ")}</span><h2>{scene.title}</h2></header><dl><div><dt>Failure window</dt><dd>{scene.failureWindow}</dd></div><div><dt>Durable invariant</dt><dd>{scene.invariant}</dd></div><div><dt>{mode === "demo" ? "Expected event sequence" : "Reference sequence"}</dt><dd className="event-sequence">{scene.eventSequence.map((event) => <span key={event}>{event}</span>)}</dd></div></dl>{mode === "demo" ? <a href={`/workflows/${encodeURIComponent(scene.workflowId)}?mode=demo`}>Inspect execution</a> : <p className="live-scene-note">Reference sequence only; not observed Live evidence. Live evidence appears here only when a matching current execution is available.</p>}</article>
+}

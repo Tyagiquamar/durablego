@@ -371,7 +371,7 @@ func (e *Engine) RunSchedulerPass() int {
 	return changed
 }
 
-func (e *Engine) ListWorkflows() []Workflow {
+func (e *Engine) ListWorkflows() ([]Workflow, error) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	out := make([]Workflow, 0, len(e.workflows))
@@ -379,7 +379,7 @@ func (e *Engine) ListWorkflows() []Workflow {
 		out = append(out, *cloneWorkflow(workflow))
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].CreatedAt.Before(out[j].CreatedAt) })
-	return out
+	return out, nil
 }
 
 func (e *Engine) Workflow(id string) (*Workflow, []Activity, []Event, error) {

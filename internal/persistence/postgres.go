@@ -464,7 +464,7 @@ func (p *Postgres) RunSchedulerPass() int {
 	return changed
 }
 
-func (p *Postgres) ListWorkflows() []execution.Workflow {
+func (p *Postgres) ListWorkflows() ([]execution.Workflow, error) {
 	ctx := context.Background()
 	rows, err := p.pool.Query(ctx, `
 		SELECT w.id::text, n.name, d.name, COALESCE(i.key, ''), w.status, w.created_at, w.updated_at
@@ -475,18 +475,24 @@ func (p *Postgres) ListWorkflows() []execution.Workflow {
 		ORDER BY w.created_at
 	`)
 	if err != nil {
-		return nil
+		return nil, err
 	}
 	defer rows.Close()
 	var workflows []execution.Workflow
 	for rows.Next() {
 		var workflow execution.Workflow
 		if err := rows.Scan(&workflow.ID, &workflow.Namespace, &workflow.Name, &workflow.IdempotencyKey, &workflow.Status, &workflow.CreatedAt, &workflow.UpdatedAt); err != nil {
-			return nil
+			return nil, err
 		}
 		workflows = append(workflows, workflow)
 	}
-	return workflows
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	if workflows == nil {
+		workflows = []execution.Workflow{}
+	}
+	return workflows, nil
 }
 
 func (p *Postgres) Workflow(id string) (*execution.Workflow, []execution.Activity, []execution.Event, error) {

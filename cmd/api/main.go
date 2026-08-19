@@ -18,7 +18,7 @@ func main() {
 	}
 	defer store.Close()
 	log.Printf("durablego api listening on %s", cfg.Addr)
-	if err := http.ListenAndServe(cfg.Addr, api.New(store)); err != nil {
+	if err := http.ListenAndServe(cfg.Addr, api.New(store, cfg.APIKey)); err != nil {
 		log.Fatal(err)
 	}
 }

@@ -43,12 +43,31 @@ Windows helper:
 .\scripts\start-order-workflow.ps1
 ```
 
+## Deployment
+
+DurableGo is packaged for Railway (API, scheduler, and independently identified
+workers) with the read-only dashboard deployed to Vercel. See
+[docs/deployment.md](docs/deployment.md) for the service topology, required
+environment variables, verification steps, and current hosting prerequisite.
+
 Tests:
 
 ```bash
 go test ./...
 go test -race ./...
 ```
+
+Dashboard validation:
+
+```bash
+cd web
+pnpm build
+pnpm test:browser
+```
+
+The dashboard defaults to deterministic `Demo` evidence. Select `Live` to read
+the configured `DURABLEGO_API_URL`; unavailable or empty live results remain
+explicit and are never replaced with fixture data.
 
 If Go is not installed locally, run:
 

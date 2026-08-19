@@ -11,7 +11,7 @@ import (
 
 type Backend interface {
 	Start(def execution.WorkflowDefinition, idempotencyKey string) (*execution.Workflow, bool, error)
-	ListWorkflows() []execution.Workflow
+	ListWorkflows() ([]execution.Workflow, error)
 	Workflow(id string) (*execution.Workflow, []execution.Activity, []execution.Event, error)
 	Cancel(workflowID string) error
 	Claim(workerID, taskQueue string) (execution.Claim, error)
@@ -23,10 +23,15 @@ type Backend interface {
 type Server struct {
 	backend Backend
 	mux     *http.ServeMux
+	apiKey  string
 }
 
-func New(backend Backend) *Server {
-	s := &Server{backend: backend, mux: http.NewServeMux()}
+func New(backend Backend, apiKeys ...string) *Server {
+	apiKey := ""
+	if len(apiKeys) > 0 {
+		apiKey = apiKeys[0]
+	}
+	s := &Server{backend: backend, mux: http.NewServeMux(), apiKey: apiKey}
 	s.routes()
 	return s
 }
@@ -42,15 +47,25 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET /readyz", func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]string{"status": "ready"})
 	})
-	s.mux.HandleFunc("POST /v1/workflows", s.startWorkflow)
+	s.mux.HandleFunc("POST /v1/workflows", s.authorizeMutation(s.startWorkflow))
 	s.mux.HandleFunc("GET /v1/workflows", s.listWorkflows)
 	s.mux.HandleFunc("GET /v1/workflows/{id}", s.getWorkflow)
-	s.mux.HandleFunc("POST /v1/workflows/{id}/cancel", s.cancelWorkflow)
-	s.mux.HandleFunc("POST /v1/worker/poll", s.poll)
-	s.mux.HandleFunc("POST /v1/worker/heartbeat", s.heartbeat)
-	s.mux.HandleFunc("POST /v1/worker/complete", s.complete)
-	s.mux.HandleFunc("POST /v1/worker/fail", s.fail)
+	s.mux.HandleFunc("POST /v1/workflows/{id}/cancel", s.authorizeMutation(s.cancelWorkflow))
+	s.mux.HandleFunc("POST /v1/worker/poll", s.authorizeMutation(s.poll))
+	s.mux.HandleFunc("POST /v1/worker/heartbeat", s.authorizeMutation(s.heartbeat))
+	s.mux.HandleFunc("POST /v1/worker/complete", s.authorizeMutation(s.complete))
+	s.mux.HandleFunc("POST /v1/worker/fail", s.authorizeMutation(s.fail))
 	s.mux.HandleFunc("GET /metrics", s.metrics)
+}
+
+func (s *Server) authorizeMutation(next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if s.apiKey != "" && r.Header.Get("Authorization") != "Bearer "+s.apiKey {
+			writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "invalid api key"})
+			return
+		}
+		next(w, r)
+	}
 }
 
 type startWorkflowRequest struct {
@@ -83,7 +98,15 @@ func (s *Server) startWorkflow(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) listWorkflows(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, http.StatusOK, map[string]any{"workflows": s.backend.ListWorkflows()})
+	workflows, err := s.backend.ListWorkflows()
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	if workflows == nil {
+		workflows = []execution.Workflow{}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"workflows": workflows})
 }
 
 func (s *Server) getWorkflow(w http.ResponseWriter, r *http.Request) {
@@ -166,8 +189,13 @@ func (s *Server) fail(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) metrics(w http.ResponseWriter, r *http.Request) {
+	workflows, err := s.backend.ListWorkflows()
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
 	w.Header().Set("Content-Type", "text/plain; version=0.0.4")
-	_, _ = w.Write([]byte(telemetry.WorkflowMetrics(s.backend.ListWorkflows())))
+	_, _ = w.Write([]byte(telemetry.WorkflowMetrics(workflows)))
 }
 
 type leaseRequest struct {

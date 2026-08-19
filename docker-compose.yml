@@ -50,6 +50,7 @@ services:
     command: go run ./cmd/worker
     environment:
       DURABLEGO_DATABASE_URL: postgres://durablego:durablego@postgres:5432/durablego?sslmode=disable
+      DURABLEGO_WORKER_ID: worker-a
     volumes:
       - .:/src
     depends_on:
@@ -62,6 +63,7 @@ services:
     command: go run ./cmd/worker
     environment:
       DURABLEGO_DATABASE_URL: postgres://durablego:durablego@postgres:5432/durablego?sslmode=disable
+      DURABLEGO_WORKER_ID: worker-b
     volumes:
       - .:/src
     depends_on:
@@ -74,7 +76,7 @@ services:
     command: sh -c "npm install --package-lock=false --no-audit --no-fund && npm run dev -- --hostname 0.0.0.0"
     environment:
       CI: "true"
-      NEXT_PUBLIC_DURABLEGO_API: http://localhost:8080
+      DURABLEGO_API_URL: http://api:8080
     volumes:
       - .:/src
     ports:
