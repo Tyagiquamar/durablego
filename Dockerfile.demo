@@ -1,0 +1,26 @@
+# All-in-one demo image for free-tier hosts (Render, SnapDeploy).
+# Runs api + scheduler + two workers in a single container; state lives in
+# Neon Postgres. Use "Dockerfile.demo" as the Dockerfile path in the host UI.
+
+FROM golang:1.23-alpine AS go-builder
+
+WORKDIR /src
+COPY go.mod go.sum ./
+RUN go mod download
+COPY . .
+RUN CGO_ENABLED=0 GOOS=linux go build -o /bin/durablego-api ./cmd/api
+RUN CGO_ENABLED=0 GOOS=linux go build -o /bin/durablego-scheduler ./cmd/scheduler
+RUN CGO_ENABLED=0 GOOS=linux go build -o /bin/durablego-worker ./cmd/worker
+
+FROM alpine:3.21
+
+RUN apk --no-cache add ca-certificates
+COPY --from=go-builder /bin/durablego-api /durablego-api
+COPY --from=go-builder /bin/durablego-scheduler /durablego-scheduler
+COPY --from=go-builder /bin/durablego-worker /durablego-worker
+COPY docker/allinone-entrypoint.sh /allinone-entrypoint.sh
+RUN chmod +x /allinone-entrypoint.sh
+
+# Render/SnapDeploy route traffic to $PORT; the api binary honors it.
+EXPOSE 8080
+ENTRYPOINT ["/allinone-entrypoint.sh"]
