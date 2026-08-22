@@ -1,5 +1,7 @@
 # DurableGo
 
+![CI](https://github.com/Tyagiquamar/durablego/actions/workflows/ci.yml/badge.svg)
+
 DurableGo is a small, inspectable durable-workflow engine written in Go. It is
 for learning and demonstrating what happens when background work is retried,
 workers crash, or an old worker resumes after its lease has been reclaimed.
@@ -178,10 +180,13 @@ Invariant: the stale completion is rejected with `409 Conflict`, `activity.stale
 
 ## How This Is Tested
 
-No CI service runs these — they are the local pre-push ritual:
+GitHub Actions runs `make verify`, `make race`, the dashboard typecheck/build,
+and both Docker image builds on every push and PR to main. The same commands
+reproduce locally:
 
 ```
 make verify   # vet + unit (-short) + PostgreSQL suite + process-kill failure scene
+make race     # full suite under the race detector
 ```
 
 | Target | What it proves |
