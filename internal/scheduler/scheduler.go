@@ -7,7 +7,7 @@ import (
 )
 
 type Backend interface {
-	RunSchedulerPass() int
+	RunSchedulerPass(ctx context.Context) (int, error)
 }
 
 type Scheduler struct {
@@ -28,7 +28,13 @@ func (s Scheduler) Run(ctx context.Context) error {
 		case <-ctx.Done():
 			return ctx.Err()
 		case <-ticker.C:
-			changed := s.Backend.RunSchedulerPass()
+			changed, err := s.Backend.RunSchedulerPass(ctx)
+			if err != nil {
+				if s.Logger != nil {
+					s.Logger.Printf("scheduler pass error: %v", err)
+				}
+				continue
+			}
 			if changed > 0 && s.Logger != nil {
 				s.Logger.Printf("scheduler pass changed=%d", changed)
 			}

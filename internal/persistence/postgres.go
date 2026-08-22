@@ -12,9 +12,11 @@ import (
 )
 
 type Postgres struct {
-	pool        *pgxpool.Pool
-	leaseTTL    time.Duration
-	maxAttempts int
+	pool              *pgxpool.Pool
+	leaseTTL          time.Duration
+	maxAttempts       int
+	crashBeforeCommit func() error
+	crashAfterCommit  func()
 }
 
 func NewPostgres(ctx context.Context, databaseURL string, leaseTTL time.Duration, maxAttempts int) (*Postgres, error) {
@@ -118,11 +120,19 @@ func (p *Postgres) Start(def execution.WorkflowDefinition, idempotencyKey string
 		return nil, false, err
 	}
 	if idempotencyKey != "" {
-		if _, err := tx.Exec(ctx, `
+		tag, err := tx.Exec(ctx, `
 			INSERT INTO idempotency_keys(namespace_id, key, workflow_execution_id)
 			VALUES ($1, $2, $3)
-		`, namespaceID, idempotencyKey, workflow.ID); err != nil {
+			ON CONFLICT(namespace_id, key) DO NOTHING
+		`, namespaceID, idempotencyKey, workflow.ID)
+		if err != nil {
 			return nil, false, err
+		}
+		if tag.RowsAffected() == 0 {
+			if err := tx.Rollback(ctx); err != nil {
+				return nil, false, err
+			}
+			return p.existingIdempotentWorkflow(namespaceID, idempotencyKey)
 		}
 	}
 	if err := appendEvent(ctx, tx, workflow.ID, "", "workflow.started", "workflow created"); err != nil {
@@ -165,8 +175,16 @@ func (p *Postgres) Start(def execution.WorkflowDefinition, idempotencyKey string
 			return nil, false, err
 		}
 	}
+	if p.crashBeforeCommit != nil {
+		if err := p.crashBeforeCommit(); err != nil {
+			return nil, false, err
+		}
+	}
 	if err := tx.Commit(ctx); err != nil {
 		return nil, false, err
+	}
+	if p.crashAfterCommit != nil {
+		p.crashAfterCommit()
 	}
 	return workflow, false, nil
 }
@@ -277,7 +295,7 @@ func (p *Postgres) Complete(activityID, workerID string, token int64) error {
 	if err := appendEvent(ctx, tx, activity.WorkflowID, activity.ID, "activity.completed", fmt.Sprintf("%s completed", activity.Name)); err != nil {
 		return err
 	}
-	if err := releaseReady(ctx, tx, activity.WorkflowID); err != nil {
+	if _, err := releaseReady(ctx, tx, activity.WorkflowID); err != nil {
 		return err
 	}
 	if err := completeWorkflowIfDone(ctx, tx, activity.WorkflowID); err != nil {
@@ -398,11 +416,10 @@ func (p *Postgres) Cancel(workflowID string) error {
 	return tx.Commit(ctx)
 }
 
-func (p *Postgres) RunSchedulerPass() int {
-	ctx := context.Background()
+func (p *Postgres) RunSchedulerPass(ctx context.Context) (int, error) {
 	tx, err := p.pool.BeginTx(ctx, pgx.TxOptions{})
 	if err != nil {
-		return 0
+		return 0, fmt.Errorf("begin scheduler pass: %w", err)
 	}
 	defer rollback(ctx, tx)
 
@@ -416,7 +433,7 @@ func (p *Postgres) RunSchedulerPass() int {
 		RETURNING id::text, workflow_execution_id::text, name, status
 	`)
 	if err != nil {
-		return 0
+		return 0, fmt.Errorf("expire leases: %w", err)
 	}
 	type expiredActivity struct {
 		activityID string
@@ -429,13 +446,13 @@ func (p *Postgres) RunSchedulerPass() int {
 		var row expiredActivity
 		if err := rows.Scan(&row.activityID, &row.workflowID, &row.name, &row.status); err != nil {
 			rows.Close()
-			return 0
+			return 0, fmt.Errorf("scan expired lease: %w", err)
 		}
 		expired = append(expired, row)
 	}
 	rows.Close()
 	if err := rows.Err(); err != nil {
-		return 0
+		return 0, fmt.Errorf("iterate expired leases: %w", err)
 	}
 	for _, row := range expired {
 		eventType := "activity.lease_expired"
@@ -444,24 +461,26 @@ func (p *Postgres) RunSchedulerPass() int {
 			eventType = "activity.lease_expired_failed"
 			message = "lease expired and attempts exhausted"
 			if _, err := tx.Exec(ctx, `UPDATE workflow_executions SET status = 'failed', updated_at = now() WHERE id = $1`, row.workflowID); err != nil {
-				return 0
+				return 0, fmt.Errorf("fail workflow after lease expiry: %w", err)
 			}
 			if err := appendEvent(ctx, tx, row.workflowID, "", "workflow.failed", fmt.Sprintf("activity %s failed", row.name)); err != nil {
-				return 0
+				return 0, fmt.Errorf("append workflow.failed event: %w", err)
 			}
 		}
 		if err := appendEvent(ctx, tx, row.workflowID, row.activityID, eventType, message); err != nil {
-			return 0
+			return 0, fmt.Errorf("append %s event: %w", eventType, err)
 		}
 		changed++
 	}
-	if err := releaseReady(ctx, tx, ""); err != nil {
-		return 0
+	released, err := releaseReady(ctx, tx, "")
+	if err != nil {
+		return 0, fmt.Errorf("release retry-pending activities: %w", err)
 	}
+	changed += released
 	if err := tx.Commit(ctx); err != nil {
-		return 0
+		return 0, fmt.Errorf("commit scheduler pass: %w", err)
 	}
-	return changed
+	return changed, nil
 }
 
 func (p *Postgres) ListWorkflows() ([]execution.Workflow, error) {
@@ -540,6 +559,35 @@ func (p *Postgres) workflowTx(ctx context.Context, tx pgx.Tx, id string) (*execu
 	return &workflow, activities, events, nil
 }
 
+func (p *Postgres) existingIdempotentWorkflow(namespaceID int64, key string) (*execution.Workflow, bool, error) {
+	ctx := context.Background()
+	tx, err := p.pool.BeginTx(ctx, pgx.TxOptions{})
+	if err != nil {
+		return nil, false, err
+	}
+	defer rollback(ctx, tx)
+	var workflowID string
+	err = tx.QueryRow(ctx, `
+		SELECT workflow_execution_id::text
+		FROM idempotency_keys
+		WHERE namespace_id = $1 AND key = $2
+	`, namespaceID, key).Scan(&workflowID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, false, fmt.Errorf("%w: concurrent start for idempotency key %q did not commit", execution.ErrInvalidTransition, key)
+	}
+	if err != nil {
+		return nil, false, err
+	}
+	workflow, _, _, err := p.workflowTx(ctx, tx, workflowID)
+	if err != nil {
+		return nil, false, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return nil, false, err
+	}
+	return workflow, true, nil
+}
+
 func ensureNamespace(ctx context.Context, tx pgx.Tx, name string) (int64, error) {
 	var id int64
 	err := tx.QueryRow(ctx, `
@@ -607,7 +655,7 @@ func currentLease(activity execution.Activity, workerID string, token int64) boo
 	return activity.Status == execution.ActivityRunning && activity.LeaseOwner == workerID && activity.FencingToken == token
 }
 
-func releaseReady(ctx context.Context, tx pgx.Tx, workflowID string) error {
+func releaseReady(ctx context.Context, tx pgx.Tx, workflowID string) (int, error) {
 	args := []any{}
 	scope := ""
 	if workflowID != "" {
@@ -633,7 +681,7 @@ func releaseReady(ctx context.Context, tx pgx.Tx, workflowID string) error {
 		RETURNING a.id::text, a.workflow_execution_id::text, a.name
 	`, args...)
 	if err != nil {
-		return err
+		return 0, err
 	}
 	type readyActivity struct {
 		activityID string
@@ -645,20 +693,20 @@ func releaseReady(ctx context.Context, tx pgx.Tx, workflowID string) error {
 		var row readyActivity
 		if err := rows.Scan(&row.activityID, &row.workflowID, &row.name); err != nil {
 			rows.Close()
-			return err
+			return 0, err
 		}
 		ready = append(ready, row)
 	}
 	rows.Close()
 	if err := rows.Err(); err != nil {
-		return err
+		return 0, err
 	}
 	for _, row := range ready {
 		if err := appendEvent(ctx, tx, row.workflowID, row.activityID, "activity.ready", fmt.Sprintf("%s became ready", row.name)); err != nil {
-			return err
+			return 0, err
 		}
 	}
-	return nil
+	return len(ready), nil
 }
 
 func completeWorkflowIfDone(ctx context.Context, tx pgx.Tx, workflowID string) error {

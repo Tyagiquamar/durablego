@@ -162,9 +162,31 @@ Invariant: the API returns the original workflow execution instead of creating a
 
 Invariant: activity and workflow move to failed state and event history records the terminal transition.
 
+### Worker Process Kill
+
+1. A real worker process (`cmd/testworker -hold`) claims a long-running activity against the live API.
+2. The process is SIGKILLed mid-heartbeat-window; nobody completes or fails the activity.
+3. The lease lapses, the scheduler returns the work to ready, and a second worker reclaims it with a higher fencing token and completes.
+4. The dead worker's late completion is replayed through the API.
+
+Invariant: the stale completion is rejected with `409 Conflict`, `activity.stale_completion_rejected` is recorded, and the heir's result wins. Automated in `tests/failure/kill_test.go`.
+
+## How This Is Tested
+
+No CI service runs these — they are the local pre-push ritual:
+
+```
+make verify   # vet + unit (-short) + PostgreSQL suite + process-kill failure scene
+```
+
+| Target | What it proves |
+|---|---|
+| `make test-unit` | Engine semantics on the in-memory backend (idempotent start, claim serialization, token monotonicity, retry exhaustion) |
+| `make test-pg` | The same guarantee matrix against real PostgreSQL via testcontainers, including concurrent duplicate starts racing `ON CONFLICT` |
+| `make test-failure` | A real OS process is killed mid-execution; recovery and stale rejection are proven end-to-end through the HTTP API |
+
 ## Roadmap
 
-- Wire the execution services to PostgreSQL repositories.
 - Add gRPC/protobuf worker transport in parallel with the REST worker API.
 - Expand DAG execution demos with parallel payment and inventory branches.
 - Add OpenTelemetry spans and a local Prometheus/Grafana stack.

@@ -153,6 +153,26 @@ func (e *Engine) Start(def WorkflowDefinition, idempotencyKey string) (*Workflow
 		}
 	}
 
+	// Validate the full definition before persisting anything: a bad activity
+	// name must not leave a half-created workflow behind.
+	names := map[string]bool{}
+	for _, activity := range def.Activities {
+		if activity.Name == "" {
+			return nil, false, fmt.Errorf("%w: activity name required", ErrInvalidTransition)
+		}
+		if names[activity.Name] {
+			return nil, false, fmt.Errorf("%w: duplicate activity %s", ErrInvalidTransition, activity.Name)
+		}
+		names[activity.Name] = true
+	}
+	for _, activity := range def.Activities {
+		for _, dep := range activity.DependsOn {
+			if !names[dep] {
+				return nil, false, fmt.Errorf("%w: unknown dependency %s", ErrInvalidTransition, dep)
+			}
+		}
+	}
+
 	e.nextWorkflow++
 	now := e.now()
 	workflow := &Workflow{
@@ -170,22 +190,7 @@ func (e *Engine) Start(def WorkflowDefinition, idempotencyKey string) (*Workflow
 	}
 	e.appendEventLocked(workflow.ID, "", "workflow.started", "workflow created")
 
-	names := map[string]bool{}
 	for _, activity := range def.Activities {
-		if activity.Name == "" {
-			return nil, false, fmt.Errorf("%w: activity name required", ErrInvalidTransition)
-		}
-		if names[activity.Name] {
-			return nil, false, fmt.Errorf("%w: duplicate activity %s", ErrInvalidTransition, activity.Name)
-		}
-		names[activity.Name] = true
-	}
-	for _, activity := range def.Activities {
-		for _, dep := range activity.DependsOn {
-			if !names[dep] {
-				return nil, false, fmt.Errorf("%w: unknown dependency %s", ErrInvalidTransition, dep)
-			}
-		}
 		e.nextActivity++
 		status := ActivityReady
 		if len(activity.DependsOn) > 0 {
