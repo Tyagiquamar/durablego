@@ -1,0 +1,29 @@
+name: CI
+
+on:
+  push:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify-and-race:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      # Boots throwaway PostgreSQL via testcontainers (Docker is preinstalled
+      # on the runner): vet + unit + PostgreSQL suite + process-kill scene.
+      - name: Verify
+        run: make verify
+
+      # -race needs CGO; ubuntu runners ship gcc.
+      - name: Race detector
+        run: make race
