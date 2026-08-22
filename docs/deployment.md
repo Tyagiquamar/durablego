@@ -1,51 +1,77 @@
 # DurableGo Deployment
 
-## Production topology
+## Hosted demo
 
-| Service | Runtime | Purpose |
+The public demo is a single self-contained container on free-tier hosting,
+with the read-only proof dashboard on Vercel.
+
+| Component | Runtime | Public URL |
 |---|---|---|
-| PostgreSQL | Railway Postgres | Durable workflow state, activity leases, idempotency, and event history |
-| API | Railway | Public read API, protected mutation API, health, and metrics |
-| Scheduler | Railway | Retry activation and expired-lease recovery |
-| Worker A | Railway | Demo activity worker |
-| Worker B | Railway | Independent demo activity worker for claim and fencing proofs |
-| Dashboard | Vercel | Public, read-only proof surface |
+| Engine: API, scheduler, two workers, demo traffic driver | Render free tier, built from `Dockerfile.demo` | https://durablego.onrender.com |
+| PostgreSQL: workflow state, activity leases, idempotency, event history | Neon free Postgres (`durablego` database) | set via `DURABLEGO_DATABASE_URL` |
+| Proof dashboard | Vercel | https://durablego-dashboard.vercel.app |
 
-`Dockerfile` produces the Railway runtime by default. Set `DURABLEGO_RUN` on
-each Railway service to `api`, `scheduler`, or `worker`. The API uses the
-platform-provided `PORT` automatically when `DURABLEGO_ADDR` is unset.
+Verified 2026-08-22: `GET https://durablego.onrender.com/healthz` returns `200`.
+
+### How the single container works
+
+`Dockerfile.demo` builds four binaries (`api`, `scheduler`, `worker`,
+`demo-driver`) into an Alpine image. `docker/allinone-entrypoint.sh` starts
+the API, scheduler, two independently identified workers (`worker-a`,
+`worker-b`), and a continuous demo traffic driver in one process tree.
+Leases and fencing tokens are coordinated through PostgreSQL, so the
+claim/fencing/recovery proofs behave identically to separate services. If any
+component exits, the container exits and the platform restarts everything
+together.
+
+Free-tier instances sleep when idle; a cold start can take up to ~60 seconds.
+The dashboard defaults to live mode and retries through the wake window. It
+never substitutes fixture data for an unavailable or empty API response —
+unavailable reads stay visibly unavailable.
 
 ## Required variables
 
-| Service | Variables |
+| Surface | Variables |
 |---|---|
-| API | `DURABLEGO_RUN=api`, `DURABLEGO_DATABASE_URL`, `DURABLEGO_API_KEY` |
-| Scheduler | `DURABLEGO_RUN=scheduler`, `DURABLEGO_DATABASE_URL` |
-| Worker A | `DURABLEGO_RUN=worker`, `DURABLEGO_DATABASE_URL`, `DURABLEGO_WORKER_ID=worker-a` |
-| Worker B | `DURABLEGO_RUN=worker`, `DURABLEGO_DATABASE_URL`, `DURABLEGO_WORKER_ID=worker-b` |
-| Vercel dashboard | `DURABLEGO_API_URL=https://<api-domain>` |
+| Render service | `DURABLEGO_DATABASE_URL` (Neon connection string with `sslmode=require`), `DURABLEGO_API_KEY` (protects mutation endpoints), optional `DEMO_DRIVER=false` to disable self-generated traffic |
+| Vercel dashboard | `DURABLEGO_API_URL=https://durablego.onrender.com` (server-side only; the browser never sees it) |
 
-Use the Railway Postgres connection string for `DURABLEGO_DATABASE_URL`. The
-API's `DURABLEGO_API_KEY` protects every mutation endpoint; the dashboard
-doesn't need it because it only reads workflow state and health. Use a long,
-random secret and include `Authorization: Bearer <key>` when invoking the
-protected endpoints from scripts.
+The platform-assigned `PORT` is honored by the API automatically when
+`DURABLEGO_ADDR` is unset. The dashboard reads workflows and health through
+its server-side BFF, so it needs no API key.
 
-## Deploy sequence
+Use a long random value for `DURABLEGO_API_KEY` and send
+`Authorization: Bearer <key>` when invoking protected endpoints from scripts.
 
-1. Create a Railway project and provision Railway Postgres.
-2. Create API, scheduler, and two worker services from this repository.
-3. Set the variables above, using the Postgres service reference for the
-   database URL.
-4. Confirm `GET https://<api-domain>/healthz` responds with `200`.
-5. Deploy `web/` to Vercel and set `DURABLEGO_API_URL` to the API's public URL.
-6. Open the Vercel URL and create a workflow with an authorized API request to
-   verify it appears in the dashboard.
+## Reproducing the deploy
 
-## Current hosted-deploy blocker
+1. Create a Neon database and apply `migrations/001_init.sql`
+   (e.g. `psql "$DURABLEGO_DATABASE_URL" -f migrations/001_init.sql`).
+2. In Render: New Web Service → this repository, Runtime **Docker**,
+   Dockerfile path `./Dockerfile.demo`, health check path `/healthz`. Set the
+   environment variables in the create form — they do not carry over if the
+   service is deleted and recreated.
+3. Confirm `GET https://<service>.onrender.com/healthz` responds with `200`.
+4. On Vercel: import `web/`, set `DURABLEGO_API_URL` as a server-side
+   environment variable, deploy, and create a workflow with an authorized API
+   request to verify it appears in the dashboard.
 
-Railway CLI authentication is present, but the account's Railway trial expired
-before a project could be created. No Railway project or billable resource was
-created. Enable a Railway plan, then follow the sequence above. RelayDB has
-the same account prerequisite; its specific topology is documented in
-`relaydb/docs/deployment.md`.
+The multi-service layout (separate API, scheduler, and worker containers) is
+available via `docker-compose.yml` and the root `Dockerfile`; the all-in-one
+image exists because free-tier hosts provide one process per service.
+
+## Local stack
+
+```bash
+docker compose up
+```
+
+Then start a workflow:
+
+```bash
+curl -X POST http://localhost:8080/v1/workflows \
+  -H "content-type: application/json" \
+  -d '{"namespace":"production","name":"order-processing","idempotency_key":"order-129331","activities":[{"name":"validate","task_queue":"default"}]}'
+```
+
+See the repository README for the full local walkthrough.

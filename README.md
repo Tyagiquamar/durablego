@@ -106,10 +106,12 @@ Windows helper:
 
 ## Deployment
 
-DurableGo is packaged for Railway (API, scheduler, and independently identified
-workers) with the read-only dashboard deployed to Vercel. See
-[docs/deployment.md](docs/deployment.md) for the service topology, required
-environment variables, verification steps, and current hosting prerequisite.
+DurableGo runs live as a single all-in-one container on free-tier hosting
+(API, scheduler, two workers, and a demo traffic driver) with state in Neon
+Postgres and the read-only dashboard deployed to Vercel at
+https://durablego-dashboard.vercel.app. See
+[docs/deployment.md](docs/deployment.md) for the hosted topology, required
+environment variables, and reproduction steps.
 
 Tests:
 
@@ -126,9 +128,10 @@ pnpm build
 pnpm test:browser
 ```
 
-The dashboard defaults to deterministic `Demo` evidence. Select `Live` to read
-the configured `DURABLEGO_API_URL`; unavailable or empty live results remain
-explicit and are never replaced with fixture data.
+The dashboard defaults to `Live` mode and reads the configured
+`DURABLEGO_API_URL`, retrying through free-tier cold starts. Unavailable or
+empty live results remain explicit and are never replaced with fixture data;
+deterministic `Demo` evidence is opt-in via `?mode=demo`.
 
 If Go is not installed locally, run:
 
