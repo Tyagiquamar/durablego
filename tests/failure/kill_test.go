@@ -81,7 +81,10 @@ func TestWorkerProcessKillRecovery(t *testing.T) {
 		}
 		t.Cleanup(func() {
 			_ = cmd.Process.Kill()
-			_, _ = cmd.Process.Wait()
+			// Wait (not Process.Wait) joins the io-copy goroutines writing
+			// into out; reading a bytes.Buffer while exec still copies is
+			// exactly the race the detector flags here.
+			_ = cmd.Wait()
 			if out.Len() > 0 && t.Failed() {
 				t.Logf("worker %s output:\n%s", workerID, out.String())
 			}
@@ -109,7 +112,9 @@ func TestWorkerProcessKillRecovery(t *testing.T) {
 	if err := doomed.Process.Kill(); err != nil {
 		t.Fatalf("kill doomed: %v", err)
 	}
-	_, _ = doomed.Process.Wait()
+	// cmd.Wait (not cmd.Process.Wait): joins exec's stdout-copy goroutine so
+	// the captured buffer is safe to read afterwards.
+	_ = doomed.Wait()
 	reap()
 
 	// 3. Heir1 claims the recovered activity with a higher token.
@@ -141,7 +146,7 @@ func TestWorkerProcessKillRecovery(t *testing.T) {
 	if err := heir1.Process.Kill(); err != nil {
 		t.Fatalf("kill heir1: %v", err)
 	}
-	_, _ = heir1.Process.Wait()
+	_ = heir1.Wait()
 	reap()
 
 	heir2 := spawn("heir2", false)
