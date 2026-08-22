@@ -18,12 +18,15 @@ func main() {
 	interval := envIntOr("DEMO_INTERVAL_SECS", 40)
 
 	client := &http.Client{Timeout: 10 * time.Second}
-	log.Printf("demo-driver started: api=%s interval=%ds", apiURL, interval)
+	// Mutating routes require the configured API key; without it every
+	// submission is rejected 401.
+	apiKey := os.Getenv("DURABLEGO_API_KEY")
+	log.Printf("demo-driver started: api=%s interval=%ds auth=%t", apiURL, interval, apiKey != "")
 
 	time.Sleep(15 * time.Second) // let sibling services finish booting
 
 	for i := 0; ; i++ {
-		if err := startWorkflow(client, apiURL, i); err != nil {
+		if err := startWorkflow(client, apiURL, apiKey, i); err != nil {
 			log.Printf("workflow #%d failed: %v", i, err)
 			time.Sleep(10 * time.Second)
 			continue
@@ -35,7 +38,7 @@ func main() {
 
 // startWorkflow mirrors a small e-commerce pipeline: validate -> charge ->
 // ship -> notify. Workers complete each activity through their handlers.
-func startWorkflow(client *http.Client, apiURL string, seq int) error {
+func startWorkflow(client *http.Client, apiURL, apiKey string, seq int) error {
 	body := map[string]any{
 		"namespace":       "demo",
 		"name":            "order-processing",
@@ -51,7 +54,15 @@ func startWorkflow(client *http.Client, apiURL string, seq int) error {
 	if err != nil {
 		return err
 	}
-	res, err := client.Post(apiURL+"/v1/workflows", "application/json", bytes.NewReader(raw))
+	req, err := http.NewRequest(http.MethodPost, apiURL+"/v1/workflows", bytes.NewReader(raw))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	if apiKey != "" {
+		req.Header.Set("Authorization", "Bearer "+apiKey)
+	}
+	res, err := client.Do(req)
 	if err != nil {
 		return err
 	}
