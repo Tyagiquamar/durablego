@@ -36,8 +36,9 @@ func main() {
 	}
 }
 
-// startWorkflow mirrors a small e-commerce pipeline: validate -> charge ->
-// ship -> notify. Workers complete each activity through their handlers.
+// startWorkflow mirrors a small e-commerce pipeline using the activity names
+// the worker runtime actually implements (cmd/worker): validate -> payment ->
+// inventory -> email/analytics fan-out.
 func startWorkflow(client *http.Client, apiURL, apiKey string, seq int) error {
 	body := map[string]any{
 		"namespace":       "demo",
@@ -45,9 +46,10 @@ func startWorkflow(client *http.Client, apiURL, apiKey string, seq int) error {
 		"idempotency_key": fmt.Sprintf("demo-%d-%d", time.Now().Unix(), seq),
 		"activities": []map[string]any{
 			{"name": "validate"},
-			{"name": "charge", "depends_on": []string{"validate"}},
-			{"name": "ship", "depends_on": []string{"charge"}},
-			{"name": "notify", "depends_on": []string{"ship"}},
+			{"name": "payment", "depends_on": []string{"validate"}},
+			{"name": "inventory", "depends_on": []string{"payment"}},
+			{"name": "email", "depends_on": []string{"inventory"}},
+			{"name": "analytics", "depends_on": []string{"inventory"}},
 		},
 	}
 	raw, err := json.Marshal(body)
