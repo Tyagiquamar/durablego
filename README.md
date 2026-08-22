@@ -117,7 +117,9 @@ Tests:
 
 ```bash
 go test ./...
-go test -race ./...
+
+# -race needs CGO_ENABLED=1 plus a C toolchain; the Makefile wraps this
+CGO_ENABLED=1 go test -race ./...
 ```
 
 Dashboard validation:
@@ -194,4 +196,4 @@ make verify   # vet + unit (-short) + PostgreSQL suite + process-kill failure sc
 - Expand DAG execution demos with parallel payment and inventory branches.
 - Add OpenTelemetry spans and a local Prometheus/Grafana stack.
 - Record benchmark artifacts for 1, 2, 4, and 8 worker runs.
-- Add hosted demo deployment with API-key protection for mutating endpoints.
+- Add API-key protection for mutating demo endpoints (the hosted deployment itself is live).
