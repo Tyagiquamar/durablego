@@ -283,6 +283,125 @@ func TestStaleHeartbeatCompleteFailRejectedWithEvents(t *testing.T) {
 	}
 }
 
+// An expired lease must be rejected even while it still looks claimable:
+// status running, owner and fencing token unchanged, scheduler not yet run.
+func TestExpiredLeaseRejectsMutationsBeforeReclaim(t *testing.T) {
+	store := newStore(t, time.Second)
+	namespace := uniqueNamespace(t)
+	queue := namespace + "_queue"
+	workflow, _, err := store.Start(execution.WorkflowDefinition{
+		Namespace: namespace,
+		Name:      "expired-lease-guard",
+		Activities: []execution.ActivityDefinition{
+			{Name: "heartbeat-target", TaskQueue: queue},
+			{Name: "complete-target", TaskQueue: queue},
+			{Name: "fail-target", TaskQueue: queue},
+		},
+	}, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	stale := make([]execution.Claim, 0, 3)
+	for {
+		claim, err := store.Claim("worker-a", queue)
+		if errors.Is(err, execution.ErrNoRunnableActivity) {
+			break
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+		stale = append(stale, claim)
+	}
+	if len(stale) != 3 {
+		t.Fatalf("claims = %d, want 3", len(stale))
+	}
+	time.Sleep(1200 * time.Millisecond)
+
+	// Deliberately no RunSchedulerPass: the lease is expired by database time
+	// but not yet reclaimed, and must already be unusable.
+	if err := store.Heartbeat(stale[0].ActivityID, "worker-a", stale[0].FencingToken); !errors.Is(err, execution.ErrStaleLease) {
+		t.Fatalf("expired heartbeat err = %v, want ErrStaleLease", err)
+	}
+	if err := store.Complete(stale[1].ActivityID, "worker-a", stale[1].FencingToken); !errors.Is(err, execution.ErrStaleLease) {
+		t.Fatalf("expired completion err = %v, want ErrStaleLease", err)
+	}
+	if err := store.Fail(stale[2].ActivityID, "worker-a", stale[2].FencingToken, true, "late failure"); !errors.Is(err, execution.ErrStaleLease) {
+		t.Fatalf("expired failure err = %v, want ErrStaleLease", err)
+	}
+
+	got, activities, events, err := store.Workflow(workflow.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Status != execution.WorkflowRunning {
+		t.Fatalf("workflow status = %s, want running", got.Status)
+	}
+	claimedExpiry := map[string]time.Time{}
+	for _, claim := range stale {
+		claimedExpiry[claim.ActivityID] = claim.LeaseExpiresAt
+	}
+	for _, activity := range activities {
+		if activity.Status != execution.ActivityRunning || activity.Attempt != 1 || activity.LeaseOwner != "worker-a" {
+			t.Fatalf("activity %s mutated by expired worker: %+v", activity.Name, activity)
+		}
+		if !activity.LeaseExpiresAt.Equal(claimedExpiry[activity.ID]) {
+			t.Fatalf("activity %s lease changed by an expired worker: got %v want %v", activity.Name, activity.LeaseExpiresAt, claimedExpiry[activity.ID])
+		}
+	}
+	seen := map[string]bool{}
+	for _, event := range events {
+		seen[event.Type] = true
+	}
+	for _, expected := range []string{
+		"activity.stale_heartbeat_rejected",
+		"activity.stale_completion_rejected",
+		"activity.stale_failure_rejected",
+	} {
+		if !seen[expected] {
+			t.Fatalf("missing %q in events %v", expected, eventTypes(events))
+		}
+	}
+
+	// The scheduler can still reclaim the expired work afterwards.
+	changed, err := store.RunSchedulerPass(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if changed != 3 {
+		t.Fatalf("scheduler changed = %d, want 3", changed)
+	}
+	current := make([]execution.Claim, 0, 3)
+	for {
+		claim, err := store.Claim("worker-b", queue)
+		if errors.Is(err, execution.ErrNoRunnableActivity) {
+			break
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+		current = append(current, claim)
+	}
+	if len(current) != 3 {
+		t.Fatalf("reclaims = %d, want 3", len(current))
+	}
+	for i, claim := range current {
+		if claim.FencingToken <= stale[i].FencingToken {
+			t.Fatalf("token did not advance for %s: old=%d new=%d", claim.Name, stale[i].FencingToken, claim.FencingToken)
+		}
+		if err := store.Complete(claim.ActivityID, "worker-b", claim.FencingToken); err != nil {
+			t.Fatal(err)
+		}
+	}
+	got, _, _, err = store.Workflow(workflow.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Status != execution.WorkflowCompleted {
+		t.Fatalf("status = %s, want completed after reclaim", got.Status)
+	}
+}
+
 func TestLeaseExpiryReclaimsActivity(t *testing.T) {
 	store := newStore(t, time.Second)
 	queue := uniqueNamespace(t) + "_queue"

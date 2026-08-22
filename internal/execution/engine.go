@@ -265,8 +265,8 @@ func (e *Engine) Heartbeat(activityID, workerID string, token int64) error {
 	if err != nil {
 		return err
 	}
-	if !activity.currentLease(workerID, token) {
-		e.appendEventLocked(activity.WorkflowID, activity.ID, "activity.stale_heartbeat_rejected", "heartbeat rejected by fencing token")
+	if !activity.currentLease(workerID, token, e.now()) {
+		e.appendEventLocked(activity.WorkflowID, activity.ID, "activity.stale_heartbeat_rejected", "heartbeat rejected by fencing token or expired lease")
 		return ErrStaleLease
 	}
 	activity.LeaseExpiresAt = e.now().Add(e.leaseTTL)
@@ -282,8 +282,8 @@ func (e *Engine) Complete(activityID, workerID string, token int64) error {
 	if err != nil {
 		return err
 	}
-	if !activity.currentLease(workerID, token) {
-		e.appendEventLocked(activity.WorkflowID, activity.ID, "activity.stale_completion_rejected", "completion rejected by fencing token")
+	if !activity.currentLease(workerID, token, e.now()) {
+		e.appendEventLocked(activity.WorkflowID, activity.ID, "activity.stale_completion_rejected", "completion rejected by fencing token or expired lease")
 		return ErrStaleLease
 	}
 	activity.Status = ActivityCompleted
@@ -303,8 +303,8 @@ func (e *Engine) Fail(activityID, workerID string, token int64, retryable bool, 
 	if err != nil {
 		return err
 	}
-	if !activity.currentLease(workerID, token) {
-		e.appendEventLocked(activity.WorkflowID, activity.ID, "activity.stale_failure_rejected", "failure rejected by fencing token")
+	if !activity.currentLease(workerID, token, e.now()) {
+		e.appendEventLocked(activity.WorkflowID, activity.ID, "activity.stale_failure_rejected", "failure rejected by fencing token or expired lease")
 		return ErrStaleLease
 	}
 	activity.LastError = message
@@ -491,8 +491,14 @@ func (e *Engine) sortedActivityIDsLocked() []string {
 	return ids
 }
 
-func (a *Activity) currentLease(workerID string, token int64) bool {
-	return a.Status == ActivityRunning && a.LeaseOwner == workerID && a.FencingToken == token
+// currentLease reports whether the worker holds the live lease: matching
+// owner and fencing token AND an expiry still in the future. A zero expiry
+// means "no deadline", mirroring RunSchedulerPass.
+func (a *Activity) currentLease(workerID string, token int64, now time.Time) bool {
+	if a.Status != ActivityRunning || a.LeaseOwner != workerID || a.FencingToken != token {
+		return false
+	}
+	return a.LeaseExpiresAt.IsZero() || a.LeaseExpiresAt.After(now)
 }
 
 func cloneWorkflow(w *Workflow) *Workflow {

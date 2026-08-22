@@ -245,12 +245,12 @@ func (p *Postgres) Heartbeat(activityID, workerID string, token int64) error {
 	}
 	defer rollback(ctx, tx)
 
-	activity, err := lockActivity(ctx, tx, activityID)
+	activity, leaseCurrent, err := lockActivity(ctx, tx, activityID)
 	if err != nil {
 		return err
 	}
-	if !currentLease(activity, workerID, token) {
-		_ = appendEvent(ctx, tx, activity.WorkflowID, activity.ID, "activity.stale_heartbeat_rejected", "heartbeat rejected by fencing token")
+	if !currentLease(activity, workerID, token) || !leaseCurrent {
+		_ = appendEvent(ctx, tx, activity.WorkflowID, activity.ID, "activity.stale_heartbeat_rejected", "heartbeat rejected by fencing token or expired lease")
 		_ = tx.Commit(ctx)
 		return execution.ErrStaleLease
 	}
@@ -276,12 +276,12 @@ func (p *Postgres) Complete(activityID, workerID string, token int64) error {
 	}
 	defer rollback(ctx, tx)
 
-	activity, err := lockActivity(ctx, tx, activityID)
+	activity, leaseCurrent, err := lockActivity(ctx, tx, activityID)
 	if err != nil {
 		return err
 	}
-	if !currentLease(activity, workerID, token) {
-		_ = appendEvent(ctx, tx, activity.WorkflowID, activity.ID, "activity.stale_completion_rejected", "completion rejected by fencing token")
+	if !currentLease(activity, workerID, token) || !leaseCurrent {
+		_ = appendEvent(ctx, tx, activity.WorkflowID, activity.ID, "activity.stale_completion_rejected", "completion rejected by fencing token or expired lease")
 		_ = tx.Commit(ctx)
 		return execution.ErrStaleLease
 	}
@@ -312,12 +312,12 @@ func (p *Postgres) Fail(activityID, workerID string, token int64, retryable bool
 	}
 	defer rollback(ctx, tx)
 
-	activity, err := lockActivity(ctx, tx, activityID)
+	activity, leaseCurrent, err := lockActivity(ctx, tx, activityID)
 	if err != nil {
 		return err
 	}
-	if !currentLease(activity, workerID, token) {
-		_ = appendEvent(ctx, tx, activity.WorkflowID, activity.ID, "activity.stale_failure_rejected", "failure rejected by fencing token")
+	if !currentLease(activity, workerID, token) || !leaseCurrent {
+		_ = appendEvent(ctx, tx, activity.WorkflowID, activity.ID, "activity.stale_failure_rejected", "failure rejected by fencing token or expired lease")
 		_ = tx.Commit(ctx)
 		return execution.ErrStaleLease
 	}
@@ -611,12 +611,17 @@ func appendEvent(ctx context.Context, tx pgx.Tx, workflowID, activityID, eventTy
 	return err
 }
 
-func lockActivity(ctx context.Context, tx pgx.Tx, activityID string) (execution.Activity, error) {
+// lockActivity loads one activity row under FOR UPDATE and reports whether
+// its lease is still current as judged by database time (lease_expires_at >
+// now()). The caller holds the row lock until commit, so this judgement stays
+// atomic with any subsequent mutation.
+func lockActivity(ctx context.Context, tx pgx.Tx, activityID string) (execution.Activity, bool, error) {
 	var activity execution.Activity
 	var leaseOwner *string
+	var leaseCurrent bool
 	err := tx.QueryRow(ctx, `
 		SELECT id::text, workflow_execution_id::text, name, task_queue, status, attempt, max_attempts,
-		       retry_backoff_ms, lease_owner, lease_expires_at, fencing_token, next_attempt_at, COALESCE(last_error, '')
+		       retry_backoff_ms, lease_owner, lease_expires_at > now(), fencing_token, next_attempt_at, COALESCE(last_error, '')
 		FROM activity_executions
 		WHERE id = $1
 		FOR UPDATE
@@ -630,25 +635,25 @@ func lockActivity(ctx context.Context, tx pgx.Tx, activityID string) (execution.
 		&activity.MaxAttempts,
 		&activity.RetryBackoff,
 		&leaseOwner,
-		&activity.LeaseExpiresAt,
+		&leaseCurrent,
 		&activity.FencingToken,
 		&activity.NextAttemptAt,
 		&activity.LastError,
 	)
 	if errors.Is(err, pgx.ErrNoRows) {
-		return execution.Activity{}, execution.ErrNotFound
+		return execution.Activity{}, false, execution.ErrNotFound
 	}
 	if err != nil {
-		return execution.Activity{}, err
+		return execution.Activity{}, false, err
 	}
 	if activity.Status != execution.ActivityRunning {
-		return execution.Activity{}, fmt.Errorf("%w: activity is %s", execution.ErrInvalidTransition, activity.Status)
+		return execution.Activity{}, false, fmt.Errorf("%w: activity is %s", execution.ErrInvalidTransition, activity.Status)
 	}
 	if leaseOwner != nil {
 		activity.LeaseOwner = *leaseOwner
 	}
 	activity.RetryBackoff *= time.Millisecond
-	return activity, nil
+	return activity, leaseCurrent, nil
 }
 
 func currentLease(activity execution.Activity, workerID string, token int64) bool {
