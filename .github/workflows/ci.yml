@@ -25,5 +25,13 @@ jobs:
         run: make verify
 
       # -race needs CGO; ubuntu runners ship gcc.
+      #
+      # Ryuk is disabled here only: testcontainers-go v0.44.0 has a
+      # library-internal data race in its reaper startup (reaperSpawner.
+      # reuseOrCreate) that -race flags. Tests terminate containers
+      # explicitly via testdb.Start's cleanup, so the reaper safety net
+      # is not needed for correctness.
       - name: Race detector
         run: make race
+        env:
+          TESTCONTAINERS_RYUK_DISABLED: "true"
