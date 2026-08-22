@@ -20,12 +20,15 @@ func main() {
 	client := &http.Client{Timeout: 10 * time.Second}
 	log.Printf("demo-driver started: api=%s interval=%ds", apiURL, interval)
 
+	time.Sleep(15 * time.Second) // let sibling services finish booting
+
 	for i := 0; ; i++ {
 		if err := startWorkflow(client, apiURL, i); err != nil {
 			log.Printf("workflow #%d failed: %v", i, err)
-		} else {
-			log.Printf("workflow #%d submitted", i)
+			time.Sleep(10 * time.Second)
+			continue
 		}
+		log.Printf("workflow #%d submitted", i)
 		time.Sleep(time.Duration(interval) * time.Second)
 	}
 }
