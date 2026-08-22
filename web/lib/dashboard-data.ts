@@ -6,15 +6,33 @@ type APIRecord = Record<string, unknown>
 const statuses = new Set<WorkflowStatus>(["running", "completed", "failed", "cancelled"])
 const activityStatuses = new Set<ActivityStatus>(["ready", "running", "retry_pending", "completed", "failed", "cancelled"])
 
+// Live is the default view; demo fixtures are opt-in via ?mode=demo.
 export function resolveMode(mode?: string | string[]): DashboardMode {
-  return (Array.isArray(mode) ? mode[0] : mode) === "live" ? "live" : "demo"
+  return (Array.isArray(mode) ? mode[0] : mode) === "demo" ? "demo" : "live"
+}
+
+const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms))
+
+// Free-tier instances sleep; the first request wakes them (~30-60s). Retry a
+// few times before surfacing an explicit unavailable state -- never fixtures.
+async function withColdStartRetries<T>(fn: () => Promise<T>): Promise<T> {
+  let lastError: unknown
+  for (let attempt = 0; attempt < 3; attempt++) {
+    try {
+      return await fn()
+    } catch (err) {
+      lastError = err
+      if (attempt < 2) await sleep(10_000)
+    }
+  }
+  throw lastError
 }
 
 export async function getDashboardData(mode: DashboardMode, includeDetails = true): Promise<DashboardData> {
   if (mode === "demo") return demoDashboardData()
 
   try {
-    const response = await fetchAPI("/v1/workflows")
+    const response = await withColdStartRetries(() => fetchAPI("/v1/workflows"))
     if (!response.ok) return unavailable(mode, `The workflow list returned HTTP ${response.status}.`)
     const body = (await response.json()) as APIRecord
     const workflowRecords = requiredArray(body.workflows ?? body.Workflows, "workflows")
@@ -45,7 +63,7 @@ export async function getWorkflowData(mode: DashboardMode, id: string): Promise<
 }
 
 async function getLiveWorkflow(id: string): Promise<WorkflowView> {
-  const response = await fetchAPI(`/v1/workflows/${encodeURIComponent(id)}`)
+  const response = await withColdStartRetries(() => fetchAPI(`/v1/workflows/${encodeURIComponent(id)}`))
   if (response.status === 404) throw new Error("not-found")
   if (!response.ok) throw new Error(`HTTP ${response.status}`)
   const body = (await response.json()) as APIRecord
@@ -56,7 +74,7 @@ async function getLiveWorkflow(id: string): Promise<WorkflowView> {
 }
 
 function fetchAPI(path: string): Promise<Response> {
-  return fetch(`${apiBaseUrl()}${path}`, { cache: "no-store", signal: AbortSignal.timeout(5_000) })
+  return fetch(`${apiBaseUrl()}${path}`, { cache: "no-store", signal: AbortSignal.timeout(7_000) })
 }
 
 function apiBaseUrl(): string {

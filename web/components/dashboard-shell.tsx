@@ -15,7 +15,7 @@ const navigation = [
 export function DashboardShell({ children }: { children: ReactNode }) {
   const pathname = usePathname()
   const searchParams = useSearchParams()
-  const mode = searchParams.get("mode") === "live" ? "live" : "demo"
+  const mode = searchParams.get("mode") === "demo" ? "demo" : "live"
 
   return (
     <div className="dashboard-frame">
@@ -28,10 +28,10 @@ export function DashboardShell({ children }: { children: ReactNode }) {
             return <a aria-current={active ? "page" : undefined} className={active ? "active" : ""} href={modeHref(href, mode)} key={href}><Icon aria-hidden="true" /><span>{label}</span></a>
           })}
         </nav>
-        <div className="sidebar-footnote"><span>READ ONLY</span><p>Durable state and lease evidence.</p></div>
+        <div className="sidebar-footnote"><span>READ ONLY</span><p>Durable state and lease evidence, from a live engine that proves its own recovery.</p></div>
       </aside>
       <div className="dashboard-workspace">
-        <header className="runtime-bar"><div className="source-label" aria-live="polite"><span className={mode === "demo" ? "source-dot demo" : "source-dot live"} aria-hidden="true" /><span>{mode === "demo" ? "Demo evidence" : "Live API observation"}</span></div><ModeToggle /></header>
+        <header className="runtime-bar"><div className="source-label" aria-live="polite"><span className={mode === "demo" ? "source-dot demo" : "source-dot live"} aria-hidden="true" /><span>{mode === "demo" ? "Demo fixtures" : "Live API observation"}</span></div><ModeToggle /></header>
         <main id="main-content" className="dashboard-main">{children}</main>
       </div>
     </div>

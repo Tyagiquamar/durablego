@@ -5,7 +5,7 @@ export function DashboardLoading({ label }: { label: string }) {
 }
 
 export function DashboardUnavailable({ mode, title, message, path }: { mode: DashboardMode; title: string; message?: string; path: string }) {
-  return <section className="route-state" role="alert"><p className="eyebrow">{mode} source unavailable</p><h1>{title}</h1><p>{message}</p><a className="reload-link" href={`${path}?mode=${mode}`}>Reload this source</a></section>
+  return <section className="route-state" role="alert"><p className="eyebrow">{mode} source unavailable</p><h1>{title}</h1><p>{message}</p><p className="cold-start-note">The hosted engine runs on a free tier and sleeps when idle — the first request can take up to a minute. This page retries for ~45s before giving up; reloading usually finds it awake.</p><a className="reload-link" href={mode === "demo" ? `${path}?mode=demo` : path}>Reload this source</a></section>
 }
 
 export function PartialObservationNotice({ failedReads }: { failedReads: number }) {
